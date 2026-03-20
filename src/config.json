@@ -32,8 +32,10 @@
   "CLOCK_PORT": "clk",
  
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
+  
   "//": "Load custom I/O delays and clock uncertainties from author's SDC",
-  "EXTRA_SDCS": ["src/base.sdc"]
+  "EXTRA_SDCS": ["src/base.sdc"],
+  
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
   "//": "!!! DO NOT CHANGE ANYTHING BELOW THIS POINT !!!",
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",

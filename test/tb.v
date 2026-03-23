@@ -1,4 +1,5 @@
-`default_nettype none `timescale 1ns / 100ps
+`default_nettype none 
+`timescale 1ns / 100ps
 
 /* This testbench just instantiates the module and makes some convenient wires
    that can be driven / tested by the cocotb test.py.
@@ -40,13 +41,19 @@ module tb ();
   wire uart_rx = ui_in_base[7];
   assign ui_in = {uart_rx, ui_in_base[6:3], spi_miso, ui_in_base[1:0]};
 
+  // 1. FIX LỖI NGUỒN: Khai báo wire trung gian cho inout ports
+`ifdef USE_POWER_PINS
+  wire VPWR = 1'b1;
+  wire VGND = 1'b0;
+`endif
+
   // Replace tt_um_example with your module name:
   tt_um_huyatieo_tinyqv_speck user_project (
 
-      // Include power ports for the Gate Level test:
+      // 2. SỬ DỤNG wire trung gian thay vì số cứng 1'b1 / 1'b0
 `ifdef USE_POWER_PINS
-      .VPWR(1'b1),
-      .VGND(1'b0),
+      .VPWR(VPWR),
+      .VGND(VGND),
 `endif
 
       .ui_in  (ui_in),    // Dedicated inputs
@@ -58,5 +65,12 @@ module tb ();
       .clk    (clk),      // clock
       .rst_n  (rst_n)     // not reset
   );
+
+  // 3. FIX THIẾU SÓNG: Thêm đoạn này để Icarus Verilog tạo file dump VCD
+  initial begin
+      $dumpfile("tb.vcd");
+      $dumpvars(0, tb);
+      #1;
+  end
 
 endmodule

@@ -377,7 +377,7 @@ async def test_start(dut):
   assert int(dut.spi_cs.value) == 1
   for i in range(20):
     await ClockCycles(dut.clk, 1)
-    if dut.spi_cs == 0:
+    if int(dut.spi_cs.value) == 0:
         break
 
   # Default divider is 2
@@ -420,7 +420,7 @@ async def test_start(dut):
     assert int(dut.spi_cs.value) == 1
     for i in range(20):
         await ClockCycles(dut.clk, 1)
-        if dut.spi_cs == 0:
+        if int(dut.spi_cs.value) == 0:
             break
 
     for i in range(8):
@@ -484,7 +484,7 @@ async def test_debug_reg(dut):
 
     await ClockCycles(dut.clk, 1)
     for j in range(8):
-        assert ((dut.uo_out.value >> 2) & 0xF) == ((val >> (4 * j)) & 0xF)
+        assert ((int(dut.uo_out.value) >> 2) & 0xF) == ((val >> (4 * j)) & 0xF)
         await ClockCycles(dut.clk, 1)
     await stop_nops()
 

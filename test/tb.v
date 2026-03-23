@@ -41,7 +41,7 @@ module tb ();
   assign ui_in = {uart_rx, ui_in_base[6:3], spi_miso, ui_in_base[1:0]};
 
   // Replace tt_um_example with your module name:
-  tt_um_huyatieo_tinyqv_speckarx user_project (
+  tt_um_huyatieo_tinyqv_speck user_project (
 
       // Include power ports for the Gate Level test:
 `ifdef USE_POWER_PINS

@@ -5,18 +5,13 @@ import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, Timer
+from cocotb.triggers import ClockCycles, Timer, FallingEdge
+from cocotb.utils import get_sim_time
 
-# This hack because it isn't easy to install requirements in the TT GitHub actions
-try:
-    from riscvmodel.insn import *
-except ImportError:
-    import sys
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "riscv-model"])
-    from riscvmodel.insn import *
+from riscvmodel.insn import *
 
 from riscvmodel.regnames import x0, x1, sp, gp, tp, a0, a1, a2, a3
+from riscvmodel import csrnames
 from riscvmodel.variant import RV32E
 
 from test_util import reset
@@ -155,7 +150,7 @@ async def send_instr(dut, data, ok_to_exit=False):
                 return
             assert dut.qspi_flash_select.value == 0
 
-async def expect_load(dut, addr, val):
+async def expect_load(dut, addr, val, bytes=4):
     if addr >= 0x1800000:
         select = dut.qspi_ram_b_select
     elif addr >= 0x1000000:
@@ -167,18 +162,12 @@ async def expect_load(dut, addr, val):
         if select.value == 0:
             await start_read(dut, addr)
             dut.qspi_data_in.value = (val >> (nibble_shift_order[0])) & 0xF
-            for j in range(1,8):
+            for j in range(1,bytes*2):
                 await ClockCycles(dut.clk, 1, False)
-                if select.value != 0:
-                    assert j in (3, 5)
-                    break
                 assert select.value == 0
                 assert dut.qspi_clk_out.value == 1
                 assert dut.qspi_data_oe.value == 0
                 await ClockCycles(dut.clk, 1, False)
-                if select.value != 0:
-                    assert j in (2, 4)
-                    break
                 assert dut.qspi_clk_out.value == 0
                 dut.qspi_data_in.value = (val >> (nibble_shift_order[j])) & 0xF
             break
@@ -247,7 +236,7 @@ async def read_byte(dut, reg, expected_val):
 
   await stop_nops()
 
-async def expect_store(dut, addr):
+async def expect_store(dut, addr, bytes=4):
     if addr >= 0x1800000:
         select = dut.qspi_ram_b_select
     elif addr >= 0x1000000:
@@ -259,14 +248,14 @@ async def expect_store(dut, addr):
     for i in range(12):
         if select.value == 0:
             await start_write(dut, addr)
-            for j in range(8):
+            for j in range(bytes*2):
                 await ClockCycles(dut.clk, 1, False)
                 assert select.value == 0
                 assert dut.qspi_clk_out.value == 1
                 assert dut.qspi_data_oe.value == 0xF
                 val |= dut.qspi_data_out.value << (nibble_shift_order[j])
                 await ClockCycles(dut.clk, 1, False)
-                assert select.value == (1 if j == 7 else 0)
+                assert select.value == (1 if j == bytes*2-1 else 0)
                 assert dut.qspi_clk_out.value == 0
             await ClockCycles(dut.clk, 1, False)
             assert select.value == 1
@@ -333,29 +322,33 @@ async def test_start(dut):
   assert dut.uart_tx.value == 1
 
   # Test UART RX
-  assert dut.uart_rts.value == 0
-  uart_rx_byte = random.randint(0, 255)
-  dut.uart_rx.value = 0
-  await Timer(bit_time, "ns")
-  assert dut.uart_rts.value == 1
-  for i in range(8):
-      dut.uart_rx.value = uart_rx_byte & 1
-      await Timer(bit_time, "ns")
-      assert dut.uart_rts.value == 1
-      uart_rx_byte >>= 1
-  dut.uart_rx.value = 1
-  await Timer(bit_time, "ns")
-  assert dut.uart_rts.value == 1
+  for j in range(10):
+    assert dut.uart_rts.value == 0
+    uart_rx_byte = random.randint(0, 255)
+    val = uart_rx_byte
+    dut.uart_rx.value = 0
+    await Timer(bit_time, "ns")
+    for i in range(8):
+        dut.uart_rx.value = val & 1
+        await Timer(bit_time, "ns")
+        assert dut.uart_rts.value == 1
+        val >>= 1
+    dut.uart_rx.value = 1
+    await Timer(bit_time, "ns")
+    assert dut.uart_rts.value == 1
 
-  await stop_nops()
+    await stop_nops()
 
-  await send_instr(dut, InstructionLW(x1, tp, 0x14).encode())
-  await read_byte(dut, x1, 0x2)
-  await send_instr(dut, InstructionLW(x1, tp, 0x10).encode())
-  await read_byte(dut, x1, uart_rx_byte)
-  assert dut.uart_rts.value == 0
-  await send_instr(dut, InstructionLW(x1, tp, 0x14).encode())
-  await read_byte(dut, x1, 0)
+    await send_instr(dut, InstructionLW(x1, tp, 0x14).encode())
+    await read_byte(dut, x1, 0x2)
+    await send_instr(dut, InstructionLW(x1, tp, 0x10).encode())
+    await read_byte(dut, x1, uart_rx_byte)
+    assert dut.uart_rts.value == 0
+    await send_instr(dut, InstructionLW(x1, tp, 0x14).encode())
+    await read_byte(dut, x1, 0)
+
+    if j != 9:
+        start_nops(dut)
 
   # Test Debug UART TX
   uart_byte = 0x5A
@@ -376,16 +369,16 @@ async def test_start(dut):
     if dut.spi_cs == 0:
         break
 
-  # Default divider is 2
-  divider = 2
+  # Default divider is 1
+  divider = 1
   for i in range(8):
       assert dut.spi_cs == 0
       assert dut.spi_sck == 0
       assert dut.spi_mosi.value == (1 if (spi_byte & 0x80) else 0)
+      dut.spi_miso.value = (1 if (spi_byte_in & 0x80) else 0)
       await ClockCycles(dut.clk, divider)
       assert dut.spi_cs == 0
       assert dut.spi_sck == 1
-      dut.spi_miso.value = (1 if (spi_byte_in & 0x80) else 0)
       assert dut.spi_mosi.value == (1 if (spi_byte & 0x80) else 0)
       await ClockCycles(dut.clk, divider)
       spi_byte <<= 1
@@ -401,12 +394,12 @@ async def test_start(dut):
   await send_instr(dut, InstructionLW(x1, tp, 0x20).encode())
   await read_byte(dut, x1, spi_byte_in >> 8)
 
-  for divider in range(1,5):
+  for divider in range(1,16):
     spi_byte = random.randint(0, 255)
     spi_byte_in = random.randint(0, 255)
     #print(f"{spi_byte_in:02x}")
     spi_config = divider - 1
-    if divider == 1: spi_config += 4  # Use high latency for divider 1
+    if divider == 1: spi_config += 256  # Use high latency for divider 1
     await send_instr(dut, InstructionADDI(x1, x0, spi_config).encode())
     await send_instr(dut, InstructionSW(tp, x1, 0x24).encode())
     await send_instr(dut, InstructionADDI(x1, x0, spi_byte | 0x100).encode())
@@ -451,6 +444,191 @@ async def test_start(dut):
         await send_instr(dut, InstructionADDI(x0, x0, 0).encode())
     assert (dut.uo_out.value & gpio_sel) == (gpio_out & gpio_sel)
 
+  # Ensure uo_out is normally high
+  await send_instr(dut, InstructionADDI(x1, x0, 0x80).encode())
+  await send_instr(dut, InstructionSW(tp, x1, 0x0).encode())
+
+  # PWM
+  for i in range(10):
+    level = random.randint(0, 255)
+    sel = random.randint(0, 3)
+    await send_instr(dut, InstructionADDI(x1, x0, (sel << 8) | 0x80).encode())
+    await send_instr(dut, InstructionSW(tp, x1, 0x0C).encode())
+    await send_instr(dut, InstructionADDI(x1, x0, level).encode())
+    await send_instr(dut, InstructionSW(tp, x1, 0x28).encode())
+    start_nops(dut)
+    await ClockCycles(dut.clk, 24)
+
+    count = 0
+    for i in range(255):
+      value = 0
+      if sel & 1:
+        value = dut.uo_out.value >> 7
+        if sel & 2:
+          assert (dut.uio_out.value >> 7) == value
+      else:
+        assert (dut.uo_out.value >> 7) == 1
+        if sel & 2:
+          value = dut.uio_out.value >> 7
+      
+      if (sel & 2) == 0:
+        assert (dut.uio_out.value >> 7) == 1
+      
+      count += value
+      await ClockCycles(dut.clk, 1)
+
+    if sel == 0: level = 0
+    assert count == level
+
+    await stop_nops()
+
+@cocotb.test()
+async def test_timer(dut):
+    dut._log.info("Start")
+
+    clock = Clock(dut.clk, 15.624, units="ns")
+    cocotb.start_soon(clock.start())
+
+    mhz_clock = Clock(dut.mhz_clk, 1000, units="ns")
+    cocotb.start_soon(mhz_clock.start())
+
+    await FallingEdge(dut.mhz_clk)
+
+    # Reset
+    await reset(dut)
+    start_time = get_sim_time("ns")
+
+    # Should start reading flash after 1 cycle
+    await ClockCycles(dut.clk, 1)
+    await start_read(dut, 0)
+
+    # Read time
+    await send_instr(dut, InstructionLW(x1, tp, 0x34).encode())
+    assert await read_reg(dut, x1) <= 1
+
+    start_nops(dut)
+    await Timer(5, "us")
+    await stop_nops()
+
+    # Read time
+    await send_instr(dut, InstructionLW(x1, tp, 0x34).encode())
+    assert 6 <= await read_reg(dut, x1) <= 8
+
+    # Set timecmp
+    await send_instr(dut, InstructionADDI(x1, x0, 20).encode())
+    await send_instr(dut, InstructionSW(tp, x1, 0x38).encode())
+
+    # And read back
+    await send_instr(dut, InstructionLW(a0, tp, 0x38).encode())
+    assert await read_reg(dut, a0) == 20
+
+    # Enable timer interrupt
+    await send_instr(dut, InstructionADDI(x1, x0, 0x80).encode())
+    await send_instr(dut, InstructionCSRRW(x0, x1, csrnames.mie).encode())
+
+    while dut.qspi_flash_select.value == 0:
+        cur_time = get_sim_time("ns") - start_time
+        await send_instr(dut, InstructionADDI(x0, x0, 0).encode(), cur_time > 19300)
+        assert cur_time <= 20500
+
+    await ClockCycles(dut.clk, 2)
+    await start_read(dut, 8)
+    await send_instr(dut, InstructionCSRRS(a0, x0, csrnames.mcause).encode())
+    assert await read_reg(dut, a0) == 0x80000007
+
+@cocotb.test()
+async def test_game(dut):
+    dut._log.info("Start")
+    
+    clock = Clock(dut.clk, 15.624, units="ns")
+    cocotb.start_soon(clock.start())
+
+    # Reset
+    await reset(dut)
+    
+    # Should start reading flash after 1 cycle
+    await ClockCycles(dut.clk, 1)
+    await start_read(dut, 0)
+  
+    # Read controller state
+    await send_instr(dut, InstructionLW(x1, tp, 0x40).encode())
+    assert await read_reg(dut, x1) == 0xFFF
+    await send_instr(dut, InstructionLW(x1, tp, 0x44).encode())
+    assert await read_reg(dut, x1) == 0xFFF
+
+    for i in range(10):
+        start_nops(dut)
+
+        game_word = random.randint(0, 0xffffff)
+        val = game_word
+        for _ in range(24):
+            dut.game_data.value = (1 if val & 0x800000 else 0)
+            await Timer(5, "us")
+            dut.game_clk.value = 1
+            await Timer(5, "us")
+            dut.game_clk.value = 0
+            val <<= 1
+        
+        await Timer(5, "us")
+        dut.game_latch.value = 1
+        await Timer(5, "us")
+        dut.game_latch.value = 0
+        await stop_nops()
+
+        await send_instr(dut, InstructionLW(x1, tp, 0x40).encode())
+        assert await read_reg(dut, x1) == (game_word & 0xFFF)
+        await send_instr(dut, InstructionLW(x1, tp, 0x44).encode())
+        assert await read_reg(dut, x1) == (game_word >> 12)
+
+@cocotb.test()
+async def test_latch_memory(dut):
+    dut._log.info("Start")
+    
+    clock = Clock(dut.clk, 15.624, units="ns")
+    cocotb.start_soon(clock.start())
+
+    # Reset
+    await reset(dut)
+    
+    # Should start reading flash after 1 cycle
+    await ClockCycles(dut.clk, 1)
+    await start_read(dut, 0)
+
+    RAM_SIZE = 32
+    RAM = [0]*RAM_SIZE
+    for i in range(0, RAM_SIZE, 4):
+        await send_instr(dut, InstructionSW(tp, x0, i-0x100).encode())
+
+    for i in range(1000):
+        if random.randint(0, 1) == 0:
+            read_len = random.randint(0,2)
+            read_addr = random.randint(0,RAM_SIZE - (1 << read_len))
+            if read_len == 0: await send_instr(dut, InstructionLB(x1, tp, read_addr-0x100).encode())
+            elif read_len == 1: await send_instr(dut, InstructionLH(x1, tp, read_addr-0x100).encode())
+            else: await send_instr(dut, InstructionLW(x1, tp, read_addr-0x100).encode())
+            read_val = await read_reg(dut, x1)
+            assert (read_val & 0xFF) == RAM[read_addr]
+            if read_len > 0: assert ((read_val >> 8) & 0xFF) == RAM[read_addr+1]
+            if read_len > 1: 
+                assert ((read_val >> 16) & 0xFF) == RAM[read_addr+2]
+                assert ((read_val >> 24) & 0xFF) == RAM[read_addr+3]
+        else:
+            write_len = random.randint(0,2)
+            write_addr = random.randint(0,RAM_SIZE - (1 << write_len))
+            write_val = random.randint(0,0xffffffff)
+            await send_instr(dut, InstructionLUI(x1, (write_val >> 12) + ((write_val >> 11) & 1)).encode())
+            await send_instr(dut, InstructionADDI(x1, x1, (write_val & 0xfff) - (0x1000 if write_val & 0x800 else 0)).encode())
+
+            if write_len == 0: await send_instr(dut, InstructionSB(tp, x1, write_addr-0x100).encode())
+            elif write_len == 1: await send_instr(dut, InstructionSH(tp, x1, write_addr-0x100).encode())
+            else: await send_instr(dut, InstructionSW(tp, x1, write_addr-0x100).encode())
+            
+            RAM[write_addr] = write_val & 0xff
+            if write_len > 0: RAM[write_addr + 1] = (write_val >> 8) & 0xff
+            if write_len > 1:
+                RAM[write_addr + 2] = (write_val >> 16) & 0xff
+                RAM[write_addr + 3] = (write_val >> 24) & 0xff
+
 @cocotb.test()
 async def test_debug_reg(dut):
   dut._log.info("Start")
@@ -459,7 +637,7 @@ async def test_debug_reg(dut):
   cocotb.start_soon(clock.start())
 
   # Reset
-  await reset(dut, 1, 0x18)
+  await reset(dut, 1, 0x3)
   
   # Should start reading flash after 1 cycle
   await ClockCycles(dut.clk, 1)
@@ -679,6 +857,32 @@ class CROp:
     def get_valid_arg2(self):
         return self.rs2
 
+class InstructionCZERO_EQZ(InstructionRType):
+    def __init__(self, rd = None, rs1 = None, rs2 = None):
+        self.rd = rd
+        self.rs1 = rs1
+        self.rs2 = rs2
+        self.op = 5
+
+    def execute(self, model):
+        pass
+
+    def encode(self):
+        return (0b0000111 << 25) | (self.rs2 << 20) | (self.rs1 << 15) | (self.op << 12) | (self.rd << 7) | 0b0110011
+
+class InstructionCZERO_NEZ(InstructionRType):
+    def __init__(self, rd = None, rs1 = None, rs2 = None):
+        self.rd = rd
+        self.rs1 = rs1
+        self.rs2 = rs2
+        self.op = 7
+
+    def execute(self, model):
+        pass
+
+    def encode(self):
+        return (0b0000111 << 25) | (self.rs2 << 20) | (self.rs1 << 15) | (self.op << 12) | (self.rd << 7) | 0b0110011
+
 ops_alu = [
     SimpleOp(InstructionADDI, lambda rs1, imm: reg[rs1] + imm, "+i"),
     SimpleOp(InstructionADD, lambda rs1, rs2: reg[rs1] + reg[rs2], "+"),
@@ -699,6 +903,8 @@ ops_alu = [
     SimpleOp(InstructionSRL, lambda rs1, rs2: (reg[rs1] & 0xFFFFFFFF) >> (reg[rs2] & 0x1F), ">>l"),
     SimpleOp(InstructionSRAI, lambda rs1, imm: reg[rs1] >> imm, ">>i"),
     SimpleOp(InstructionSRA, lambda rs1, rs2: reg[rs1] >> (reg[rs2] & 0x1F), ">>"),
+    SimpleOp(InstructionCZERO_EQZ, lambda rs1, rs2: 0 if reg[rs2] == 0 else reg[rs1], "?0"),
+    SimpleOp(InstructionCZERO_NEZ, lambda rs1, rs2: 0 if reg[rs2] != 0 else reg[rs1], "?!0"),
     CIOp(encode_cli, 1, -32, lambda rs1, imm: imm, "=i(c)"),
     CIOp(encode_caddi, 1, -32, lambda rs1, imm: reg[rs1] + imm, "+i(c)"),
     CIOp(encode_cslli, 1, 0, lambda rs1, imm: reg[rs1] << imm, "<<i(c)"),
@@ -732,7 +938,8 @@ async def test_random_alu(dut):
     await start_read(dut, 0)
     
     seed = random.randint(0, 0xFFFFFFFF)
-    #seed = 1508125843
+    #seed = 476110288
+
     debug = False
     for test in range(50):
         random.seed(seed + test)
@@ -801,7 +1008,7 @@ async def set_reg(dut, rd, value):
     reg[rd] = value
 
 class CLoadOp:
-    def __init__(self, encoder, min_imm, max_imm, imm_mul, fn, name):
+    def __init__(self, encoder, min_imm, max_imm, imm_mul, bytes, fn, name):
         self.encoder = encoder
         self.fn = fn
         self.name = name
@@ -809,6 +1016,7 @@ class CLoadOp:
         self.min_imm = min_imm
         self.max_imm = max_imm
         self.imm_mul = imm_mul
+        self.bytes = bytes
 
     def randomize(self):
         self.rd = random.randint(8, 15)
@@ -819,6 +1027,8 @@ class CLoadOp:
     def execute_fn(self, rd, rs1, arg2):
         if rd != 0 and rd != 3 and rd != 4:
             reg[rd] = self.fn(self.val)
+            while reg[rd] < -0x80000000: reg[rd] += 0x100000000
+            while reg[rd] > 0x7FFFFFFF:  reg[rd] -= 0x100000000
 
     def encode(self, rd, rs1, arg2):
         return self.encoder(rd, rs1, arg2)
@@ -834,10 +1044,10 @@ class CLoadOp:
     
     async def do_mem_op(self, dut, addr):
         #print("Load {} from addr {:08x}".format(self.val, addr))
-        await expect_load(dut, addr, self.val)
+        await expect_load(dut, addr, self.val, abs(self.bytes))
 
 class LoadOp:
-    def __init__(self, instr, min_imm, max_imm, imm_mul, fn, name):
+    def __init__(self, instr, min_imm, max_imm, imm_mul, bytes, fn, name):
         self.instr = instr
         self.fn = fn
         self.name = name
@@ -845,6 +1055,7 @@ class LoadOp:
         self.min_imm = min_imm
         self.max_imm = max_imm
         self.imm_mul = imm_mul
+        self.bytes = bytes
 
     def randomize(self):
         self.rd = random.randint(0, 15)
@@ -858,6 +1069,8 @@ class LoadOp:
     def execute_fn(self, rd, rs1, arg2):
         if rd != 0 and rd != 3 and rd != 4:
             reg[rd] = self.fn(self.val)
+            while reg[rd] < -0x80000000: reg[rd] += 0x100000000
+            while reg[rd] > 0x7FFFFFFF:  reg[rd] -= 0x100000000
 
     def encode(self, rd, rs1, arg2):
         return self.instr(rd, rs1, arg2).encode()
@@ -873,7 +1086,7 @@ class LoadOp:
     
     async def do_mem_op(self, dut, addr):
         #print("Load {} from addr {:08x}".format(self.val, addr))
-        await expect_load(dut, addr, self.val)
+        await expect_load(dut, addr, self.val, abs(self.bytes))
 
 def encode_csw(base_reg, reg, imm):
     scrambled = (((imm << (10 - 3)) & 0b1110000000000) |
@@ -882,7 +1095,7 @@ def encode_csw(base_reg, reg, imm):
     return 0xC000 | scrambled | ((base_reg - 8) << 7) | ((reg - 8) << 2)
 
 class CStoreOp:
-    def __init__(self, encoder, min_imm, max_imm, imm_mul, fn, name):
+    def __init__(self, encoder, min_imm, max_imm, imm_mul, bytes, fn, name):
         self.encoder = encoder
         self.fn = fn
         self.name = name
@@ -890,6 +1103,7 @@ class CStoreOp:
         self.min_imm = min_imm
         self.max_imm = max_imm
         self.imm_mul = imm_mul
+        self.bytes = bytes
 
     def randomize(self):
         self.rs1 = random.randint(8, 15)
@@ -916,10 +1130,10 @@ class CStoreOp:
     
     async def do_mem_op(self, dut, addr):
         #print("Load {} from addr {:08x}".format(self.val, addr))
-        assert await expect_store(dut, addr) == self.fn(self.rs1)
+        assert await expect_store(dut, addr, self.bytes) == self.fn(self.rs1)
 
 class StoreOp:
-    def __init__(self, instr, min_imm, max_imm, imm_mul, fn, name):
+    def __init__(self, instr, min_imm, max_imm, imm_mul, bytes, fn, name):
         self.instr = instr
         self.fn = fn
         self.name = name
@@ -927,6 +1141,7 @@ class StoreOp:
         self.min_imm = min_imm
         self.max_imm = max_imm
         self.imm_mul = imm_mul
+        self.bytes = bytes
 
     def randomize(self):
         self.rs1 = random.randint(0, 15)
@@ -953,7 +1168,7 @@ class StoreOp:
     
     async def do_mem_op(self, dut, addr):
         #print("Load {} from addr {:08x}".format(self.val, addr))
-        assert await expect_store(dut, addr) == self.fn(self.rs1)
+        assert await expect_store(dut, addr, self.bytes) == self.fn(self.rs1)
 
 ops = [
     SimpleOp(InstructionADDI, lambda rs1, imm: reg[rs1] + imm, "+i"),
@@ -975,6 +1190,8 @@ ops = [
     SimpleOp(InstructionSRL, lambda rs1, rs2: (reg[rs1] & 0xFFFFFFFF) >> (reg[rs2] & 0x1F), ">>l"),
     SimpleOp(InstructionSRAI, lambda rs1, imm: reg[rs1] >> imm, ">>i"),
     SimpleOp(InstructionSRA, lambda rs1, rs2: reg[rs1] >> (reg[rs2] & 0x1F), ">>"),
+    SimpleOp(InstructionCZERO_EQZ, lambda rs1, rs2: 0 if reg[rs2] == 0 else reg[rs1], "?0"),
+    SimpleOp(InstructionCZERO_NEZ, lambda rs1, rs2: 0 if reg[rs2] != 0 else reg[rs1], "?!0"),
     CIOp(encode_cli, 1, -32, lambda rs1, imm: imm, "=i(c)"),
     CIOp(encode_caddi, 1, -32, lambda rs1, imm: reg[rs1] + imm, "+i(c)"),
     CIOp(encode_cslli, 1, 0, lambda rs1, imm: reg[rs1] << imm, "<<i(c)"),
@@ -991,17 +1208,19 @@ ops = [
     CROp(encode_cxor, 8, lambda rs1, rs2: reg[rs1] ^ reg[rs2], "^(c)"),
     CROp(encode_cor, 8, lambda rs1, rs2: reg[rs1] | reg[rs2], "|(c)"),
     CROp(encode_cand, 8, lambda rs1, rs2: reg[rs1] & reg[rs2], "&(c)"),
-    CLoadOp(encode_clw, 0, 31, 4, lambda val: val, "lw(c)"),
-    CLoadOp(encode_lh, 0, 1, 2, lambda val: (val & 0xFFFF) - 0x10000 if (val & 0x8000) != 0 else val & 0xFFFF, "lh(c)"),
-    CLoadOp(encode_lhu, 0, 1, 2, lambda val: val & 0xFFFF, "lhu(c)"),
-    CLoadOp(encode_lbu, 0, 3, 1, lambda val: val & 0xFF, "lbu(c)"),
-    LoadOp(InstructionLW, -0x800, 0x7ff, 1, lambda val: val, "lw"),
-    LoadOp(InstructionLH, -0x800, 0x7ff, 1, lambda val: (val & 0xFFFF) - 0x10000 if (val & 0x8000) != 0 else val & 0xFFFF, "lh"),
-    LoadOp(InstructionLB, -0x800, 0x7ff, 1, lambda val: (val & 0xFF) - 0x100 if (val & 0x80) != 0 else val & 0xFF, "lb"),
-    LoadOp(InstructionLHU, -0x800, 0x7ff, 1, lambda val: val & 0xFFFF, "lhu"),
-    LoadOp(InstructionLBU, -0x800, 0x7ff, 1, lambda val: val & 0xFF, "lbu"),
-    CStoreOp(encode_csw, 0, 31, 4, lambda rs1: reg[rs1] & 0xFFFFFFFF, "sw(c)"),
-    StoreOp(InstructionSW, -0x800, 0x7ff, 1, lambda rs1: reg[rs1] & 0xFFFFFFFF, "sw"),
+    CLoadOp(encode_clw, 0, 31, 4, 4, lambda val: val, "lw(c)"),
+    CLoadOp(encode_lh, 0, 1, 2, -2, lambda val: (val & 0xFFFF) - 0x10000 if (val & 0x8000) != 0 else val & 0xFFFF, "lh(c)"),
+    CLoadOp(encode_lhu, 0, 1, 2, 2, lambda val: val & 0xFFFF, "lhu(c)"),
+    CLoadOp(encode_lbu, 0, 3, 1, 1, lambda val: val & 0xFF, "lbu(c)"),
+    LoadOp(InstructionLW, -0x800, 0x7ff, 1, 4, lambda val: val, "lw"),
+    LoadOp(InstructionLH, -0x800, 0x7ff, 1, -2, lambda val: (val & 0xFFFF) - 0x10000 if (val & 0x8000) != 0 else val & 0xFFFF, "lh"),
+    LoadOp(InstructionLB, -0x800, 0x7ff, 1, -1, lambda val: (val & 0xFF) - 0x100 if (val & 0x80) != 0 else val & 0xFF, "lb"),
+    LoadOp(InstructionLHU, -0x800, 0x7ff, 1, 2, lambda val: val & 0xFFFF, "lhu"),
+    LoadOp(InstructionLBU, -0x800, 0x7ff, 1, 1, lambda val: val & 0xFF, "lbu"),
+    CStoreOp(encode_csw, 0, 31, 4, 4, lambda rs1: reg[rs1] & 0xFFFFFFFF, "sw(c)"),
+    StoreOp(InstructionSW, -0x800, 0x7ff, 1, 4, lambda rs1: reg[rs1] & 0xFFFFFFFF, "sw"),
+    StoreOp(InstructionSH, -0x800, 0x7ff, 1, 2, lambda rs1: reg[rs1] & 0xFFFF, "sh"),
+    StoreOp(InstructionSB, -0x800, 0x7ff, 1, 1, lambda rs1: reg[rs1] & 0xFF, "sb"),
 ]
 
 @cocotb.test()
@@ -1017,10 +1236,24 @@ async def test_random(dut):
     # Should start reading flash after 1 cycle
     await ClockCycles(dut.clk, 1)
     await start_read(dut, 0)
-    
+
     seed = random.randint(0, 0xFFFFFFFF)
-    #seed = 1508125843
+    #seed = 3808979345
+
+    RAM_SIZE = 32
+    RAM = []
+    for i in range(0, RAM_SIZE, 4):
+        val = random.randint(0, 0xFFFFFFFF)
+        await set_reg(dut, x1, val)
+        await send_instr(dut, InstructionSW(tp, x1, i-0x100).encode())
+        RAM.append(val & 0xFF)
+        RAM.append((val >> 8) & 0xFF)
+        RAM.append((val >> 16) & 0xFF)
+        RAM.append((val >> 24) & 0xFF)
+    
     debug = False
+    if debug: print("RAM: ", RAM)
+
     for test in range(10):
         random.seed(seed + test)
         dut._log.info("Running test with seed {}".format(seed + test))
@@ -1049,7 +1282,19 @@ async def test_random(dut):
                     arg2 = instr.get_valid_arg2()
 
                     if instr.is_mem_op:
-                        addr = random.randint(0x1000000-instr.imm, 0x1fffffc-instr.imm)
+                        if random.randint(0, 2) == 2:
+                            # Use latch RAM
+                            addr = random.randint(0x7ffff00-instr.imm, 0x7ffff3c-instr.imm)
+                            if instr.name[0] == 'l':
+                                val = 0
+                                for i in range(abs(instr.bytes)-1, -1, -1):
+                                    val <<= 8
+                                    val |= RAM[(addr + instr.imm + 0x1000 + i) % RAM_SIZE] 
+                                instr.val = val
+                                if debug: print(f"val {val} addr {addr + instr.imm:x}")
+                        else:
+                            # Use PSRAM
+                            addr = random.randint(0x1000000-instr.imm, 0x1fffffc-instr.imm)
                         await set_reg(dut, instr.base_reg, addr)
 
                     instr.execute_fn(rd, rs1, arg2)
@@ -1060,8 +1305,14 @@ async def test_random(dut):
             if debug: print("x{} = x{} {} {}, now {} {:08x}".format(rd, rs1, arg2, instr.name, reg[rd], instr.encode(rd, rs1, arg2)))
             await send_instr(dut, instr.encode(rd, rs1, arg2))
             if instr.is_mem_op:
-                await instr.do_mem_op(dut, addr + instr.imm)
-            #if debug:
+                if addr < 0x2000000:
+                    await instr.do_mem_op(dut, addr + instr.imm)
+                elif instr.name[0] == 's':
+                    val = instr.fn(instr.rs1)
+                    for i in range(instr.bytes):
+                        RAM[(addr + instr.imm + 0x1000 + i) % RAM_SIZE] = val & 0xFF
+                        val >>= 8
+            #if True:
             #    assert await read_reg(dut, rd) == reg[rd] & 0xFFFFFFFF
 
         for i in range(16):

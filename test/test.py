@@ -453,7 +453,7 @@ async def test_start(dut):
     await send_instr(dut, InstructionSW(tp, x1, 0x0).encode())
     for _ in range(3):
         await send_instr(dut, InstructionADDI(x0, x0, 0).encode())
-    assert (dut.uo_out.value & gpio_sel) == (gpio_out & gpio_sel)
+    assert (int(dut.uo_out.value) & gpio_sel) == (gpio_out & gpio_sel)
 
 @cocotb.test()
 async def test_debug_reg(dut):

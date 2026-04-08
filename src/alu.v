@@ -13,10 +13,13 @@
       0001 SLL: D = A << B
       0101 SRL: D = A >> B
       1101 SRA: D = A >> B (signed)
-
+    
     Multiply
       1010 MUL: D = B[15:0] * A
-
+    Speck
+      SPECK: (not implemented here) 
+       D = a + b //sub instruction SPECK.SUM for (x0 >>> 8) + y0 1100
+       D = a ^ b //sub instruction SPECK.XOR for (y0 <<< 3) ^ x0 1101
     Conditional zero (not implemented here)
       1110 CZERO.eqz
       1111 CZERO.nez
@@ -37,7 +40,6 @@ module tinyqv_alu (
     wire [4:0] b_for_add = {1'b0, (op[1] || op[3]) ? ~b : b};
     wire [4:0] sum = a_for_add + b_for_add + {4'b0, cy_in};
     wire [3:0] a_xor_b = a ^ b;
-
     always @(*) begin
         case (op[2:0])
             3'b000: d = sum[3:0];
@@ -51,7 +53,7 @@ module tinyqv_alu (
     always @(*) begin
         if (op[0])      cmp_res = ~sum[4];
         else if (op[1]) cmp_res = a[3] ^ b_for_add[3] ^ sum[4];
-        else            cmp_res = cmp_in && a_xor_b == 0;
+        else            cmp_res = cmp_in && a_xor_b == 0; 
     end
 
     assign cy_out = sum[4];
@@ -82,7 +84,7 @@ module tinyqv_shifter (
 
     wire [34:0] a_for_shift = {{3{top_bit}}, a_for_shift_right};
 
-    reg [3:0] dr;
+    reg [3:0] dr; //4bit
     always @(*) begin
         if (shift_amt[5]) dr = {4{top_bit}};
         else dr = a_for_shift[adjusted_shift_amt+:4];
@@ -92,6 +94,59 @@ module tinyqv_shifter (
 
 endmodule
 
+module speck
+(
+    input [3:2] op,
+    input [2:0] counter,
+    input [31:0] a,
+    input [4:0] b,
+    output [3:0] d,
+    input is_speck,
+    input is_right_roll
+);
+wire [3:2] op_for_shifter;
+wire [4:0] b_for_shifter;
+wire [3:0] d_shifter;
+reg [3:0] d_for_speck;
+assign b_for_shifter = (is_speck) ? ((is_right_roll)? 5'd8 : 5'd3): b;
+assign op_for_shifter = (is_speck) ? ((is_right_roll)? 2'b01 : 2'b00): op;
+assign d = d_for_speck;
+always @*   
+begin
+  if (is_speck)
+    if (is_right_roll)
+    begin
+        //logic for x >>> 8
+        case (counter)
+         3'd6: d_for_speck = a[3:0];
+         3'd7: d_for_speck = a[7:4];
+         default: d_for_speck = d_shifter;
+        endcase
+    end
+    else
+      begin
+        //logic for y <<< 3
+        case (counter)
+         3'd0: d_for_speck = {d_shifter[3], a[31:29]};
+         default: d_for_speck = d_shifter;
+        endcase
+      end
+  else d_for_speck = d_shifter;
+
+end
+
+
+tinyqv_shifter shifter_for_speck
+(
+ .op(op_for_shifter), 
+ .counter(counter), 
+ .a(a), 
+ .b(b_for_shifter), 
+ .d(d_shifter)
+);
+
+
+endmodule
 module tinyqv_mul #(parameter B_BITS=16) (
     input clk,
 

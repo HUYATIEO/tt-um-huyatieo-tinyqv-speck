@@ -1072,3 +1072,63 @@ async def test_random(dut):
             reg_value = (await read_reg(dut, i))
             if debug: print("Reg x{} = {} should be {}".format(i, reg_value, reg[i]))
             assert reg_value & 0xFFFFFFFF == reg[i] & 0xFFFFFFFF
+def encode_speck_sum(rd, rs1, rs2):
+    # opcode = 0x0B, funct3 = 000, funct7 = 0000000
+    # Cấu trúc: funct7(7) | rs2(5) | rs1(5) | funct3(3) | rd(5) | opcode(7)
+    return 0x0B | (rd << 7) | (0b000 << 12) | (rs1 << 15) | (rs2 << 20) | (0 << 25)
+
+def encode_speck_xor(rd, rs1, rs2):
+    # opcode = 0x0B, funct3 = 001, funct7 = 0000000
+    return 0x0B | (rd << 7) | (0b001 << 12) | (rs1 << 15) | (rs2 << 20) | (0 << 25)
+
+@cocotb.test()
+async def test_speck_encryption(dut):
+    dut._log.info("▶ BAT DAU TEST SPECK ENCRYPTION (NSA TEST VECTOR)")
+  
+    clock = Clock(dut.clk, 15.624, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset(dut)
+    await ClockCycles(dut.clk, 1)
+    await start_read(dut, 0)
+    
+    # KHỞI TẠO CON TRỎ BỘ NHỚ CHO TESTBENCH (Fix lỗi đọc rác)
+    await set_reg(dut, 3, 0x1000400) # gp (x3)
+    
+    # Khởi tạo Plaintext
+    await set_reg(dut, 1, 0x3b726574)
+    await set_reg(dut, 2, 0x7475432d)
+
+    round_keys = [
+        0x03020100, 0x131d0309, 0xbbd80d53, 0x0d334df3, 0x7fa43565, 0x67e6ce55,
+        0xe98cb3d2, 0xaac76cbd, 0x7f5951c8, 0x03fa82c2, 0x313533ad, 0xdff70882,
+        0x9e487c93, 0xa934b928, 0xdd2edef5, 0x8be6388d, 0x1f706b89, 0x2b87aaf8,
+        0x12d76c17, 0x6eaccd6c, 0x6a1ab912, 0x10bc6bca, 0x6057dd32, 0xd3c9b381,
+        0xb347813d, 0x8c113c35, 0xfe6b523a
+    ]
+
+    for i in range(27):
+        await set_reg(dut, 6, round_keys[i])
+        
+        # Bước 1: SPECK_SUM x5, x1, x2  -->  (x_sum lưu vào x5)
+        await send_instr(dut, encode_speck_sum(rd=5, rs1=1, rs2=2))
+        
+        # Bước 2: XOR x1, x5, x6  -->  (x_new lưu vào x1)
+        await send_instr(dut, InstructionXOR(1, 5, 6).encode())
+        
+        # Bước 3: SPECK_XOR x2, x2, x1  -->  (y_new lưu vào x2)
+        await send_instr(dut, encode_speck_xor(rd=2, rs1=2, rs2=1))
+
+        # ĐỌC VÀ IN KẾT QUẢ TỪNG VÒNG
+        rx = (await read_reg(dut, 1)) & 0xFFFFFFFF
+        ry = (await read_reg(dut, 2)) & 0xFFFFFFFF
+        dut._log.info(f"[Round {i:2d}] x = 0x{rx:08X} | y = 0x{ry:08X}")
+
+    dut._log.info(f"KET QUA CUOI CUNG (SAU 27 ROUND):")
+    dut._log.info(f"x = 0x{rx:08X}")
+    dut._log.info(f"y = 0x{ry:08X}")
+
+    assert rx == 0x8c6fa548, f"SAI x! Ky vong 0x8c6fa548 nhung nhan duoc 0x{rx:08X}"
+    assert ry == 0x454e028b, f"SAI y! Ky vong 0x454e028b nhung nhan duoc 0x{ry:08X}"
+    
+    dut._log.info("✔ MCU DA CHAY THANH CONG THUAT TOAN SPECK NSA :))")

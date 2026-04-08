@@ -53,7 +53,8 @@ module tinyqv_decoder #(parameter REG_ADDR_BITS=4) (
     wire [31:0] CADDI16SPimm = {{23{instr[12]}}, instr[4:3], instr[5], instr[2], instr[6], 4'b0};
     wire [31:0] CADDI4SPimm  = {22'b0, instr[10:7], instr[12:11], instr[5], instr[6], 2'b0};
     wire [31:0] CSCXTimm     = {{23{instr[12]}}, instr[9:7], instr[10], instr[11], 4'b0};
-
+    // Custom 00010 (speck)
+    wire is_custom0 = (instr[6:2] == 5'b00010);
     always @(*) begin
         additional_mem_ops = 3'b000;
         mem_op_increment_reg = 1;
@@ -64,13 +65,13 @@ module tinyqv_decoder #(parameter REG_ADDR_BITS=4) (
             is_alu_imm =  (instr[6:2] == 5'b00100); // rd <- rs1 OP Iimm
             is_auipc   =  (instr[6:2] == 5'b00101); // rd <- PC + Uimm
             is_store   =  (instr[6:2] == 5'b01000); // mem[rs1+Simm] <- rs2
-            is_alu_reg =  (instr[6:2] == 5'b01100); // rd <- rs1 OP rs2
+            is_alu_reg =  (instr[6:2] == 5'b01100) || is_custom0 ; // rd <- rs1 OP rs2, speck
             is_lui     =  (instr[6:2] == 5'b01101); // rd <- Uimm
             is_branch  =  (instr[6:2] == 5'b11000); // if(rs1 OP rs2) PC<-PC+Bimm
             is_jalr    =  (instr[6:2] == 5'b11001); // rd <- PC+4; PC<-rs1+Iimm
             is_jal     =  (instr[6:2] == 5'b11011); // rd <- PC+4; PC<-PC+Jimm
             is_system  =  (instr[6:2] == 5'b11100); // rd <- csr - NYI
-
+       
             // Determine immediate.  Hopefully muxing here is reasonable.
             if (is_auipc || is_lui) imm = Uimm;
             else if (is_store) imm = Simm;
@@ -81,6 +82,7 @@ module tinyqv_decoder #(parameter REG_ADDR_BITS=4) (
             // Determine alu op
             if (is_load || is_auipc || is_store || is_jalr || is_jal) alu_op = 4'b0000;  // ADD
             else if (is_branch) alu_op = {1'b0, !instr[14], instr[14:13]};
+            else if (is_custom0) alu_op = (instr[14:12] == 3'b000) ? 4'b1100 : 4'b1011; // SPECK
             else if (instr[26] && is_alu_reg) alu_op = {1'b1, instr[27:26], instr[13]};  // MUL or CZERO
             else alu_op = {instr[30] && (instr[5] || instr[13:12] == 2'b01),instr[14:12]};
 

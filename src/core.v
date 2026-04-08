@@ -94,19 +94,24 @@ module tinyqv_core #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
     ///////// ALU /////////
 
     wire is_slt = alu_op[3:1] == 3'b001;
-
+    wire is_speck_sum = alu_op[3:0] == 4'b1100; //speck sum 1100
+    wire is_speck_xor = alu_op[3:0] == 4'b1011; //speck xor 1101
+    wire is_speck = (is_speck_sum || is_speck_xor); 
     reg [0:0] alu_cycles;
     always @(*) begin
-        if (is_slt || is_shift || is_mul) alu_cycles = 1;
+        if (is_slt || is_shift || is_mul || is_speck) alu_cycles = 1; // add speck
         else alu_cycles = 0;
     end
 
     reg cy;
     reg cmp;
-    wire [3:0] alu_op_in = is_czero ? 4'b0100 : alu_op;
+    wire [3:0] speck_out;
+    wire [3:0] alu_op_in = (is_czero || is_speck_xor) ? 4'b0100 : 
+                                         is_speck_sum ? 4'b0000 : alu_op; // speck sum, speck xor use XOR 0100
     wire [3:0] alu_a_in = is_czero ? 4'b0000 : 
-                          (is_auipc || is_jal) ? pc : data_rs1;
-    wire [3:0] alu_b_in = (is_alu_reg || is_branch) ? data_rs2 : imm;
+                        is_speck ? speck_out :
+                   (is_auipc || is_jal) ? pc : data_rs1; //speck is not auipc and jal
+    wire [3:0] alu_b_in = (is_alu_reg || is_branch) ? data_rs2 : imm; //speck is alu reg
     wire [3:0] alu_out;
     wire cy_in = (counter == 0) ? (alu_op_in[1] || alu_op_in[3]) : cy;
     wire cmp_in = (counter == 0) ? 1'b1 : cmp;
@@ -119,7 +124,7 @@ module tinyqv_core #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
         cmp <= cmp_out;
     end
 
-    ///////// Shifter /////////
+    ///////// Speck Shifter /////////
 
     reg [4:0] shift_amt;
     always @(posedge clk) begin
@@ -129,8 +134,9 @@ module tinyqv_core #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
         end
     end
 
-    wire [3:0] shift_out;
-    tinyqv_shifter i_shift(alu_op[3:2], counter, tmp_data, shift_amt, shift_out);
+    
+    wire is_right_roll = is_speck_sum;
+    speck i_shift_with_speck(alu_op[3:2], counter, tmp_data, shift_amt, speck_out, is_speck, is_right_roll);
 
 
     ///////// Multiplier /////////
@@ -161,17 +167,18 @@ module tinyqv_core #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
         data_rd = 0;
         if (is_alu_imm || is_alu_reg || is_auipc) begin
             wr_en = 1;
+            if (is_speck) wr_en = cycle[0]; // protect rd from trash output at cycle 0
             if (is_czero) begin
                 if (cycle == 1) data_rd = tmp_data[3:0];
             end else if (is_slt && cycle == 1 && counter == 0)
                 data_rd = {3'b000, cmp};
             else if (is_shift && cycle == 1)
-                data_rd = shift_out;
-            else if (is_mul) begin
+                data_rd = speck_out;
+            else if (is_mul && !is_speck) begin
                 wr_en = cycle[0];
                 data_rd = mul_out;
             end else
-                data_rd = alu_out;
+                data_rd = alu_out; //speck need data here 
 
         end else if (is_load && load_data_ready) begin
             wr_en = 1;
@@ -214,7 +221,7 @@ module tinyqv_core #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
     reg load_done;
     always @(*) begin
         instr_complete = 0;
-        if (last_count) begin
+        if (last_count) begin //only 1 cycle
             if (is_auipc || is_lui || is_store || is_jal || is_jalr || is_system || is_stall || is_exception || is_branch)
                 instr_complete = 1;
             else if (is_czero)
@@ -243,7 +250,7 @@ module tinyqv_core #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
         tmp_data_shift = 1;
         if (is_exception)
             tmp_data_in = (counter == 0) ? {is_interrupt, is_trap && mstatus_mte, 2'b00} : 4'b0000;
-        else if (is_shift || is_czero)
+        else if (is_shift || is_czero || is_speck) // speck need rs1 for rotate
             tmp_data_in = data_rs1;
         else if (is_mul)
             tmp_data_in = data_rs2;
@@ -252,7 +259,7 @@ module tinyqv_core #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
         else
             tmp_data_in = data_rs2;
         
-        if (cycle == 1 && (is_shift || is_mul))
+        if (cycle == 1 && (is_shift || is_mul || is_speck))
             tmp_data_shift = 0;
     end
 

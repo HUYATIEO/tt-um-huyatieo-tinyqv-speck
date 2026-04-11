@@ -71,7 +71,7 @@ rm -rf sim_build/
 ```
 
 **Step 3: Execute the Make Command**
-Cocotb will synthesize the module and load the Hex file via the `PROG_FILE` argument.
+Cocotb will synthesize the module and load the Hex file via the `PROG_FILE` argument. Must change the make file before running.
 ```bash
 make clean
 make COCOTB_TESTCASE=test_dump COMPILE_ARGS="-DPROG_FILE=\\\"`pwd`/asm/speck_64128.hex\\\""

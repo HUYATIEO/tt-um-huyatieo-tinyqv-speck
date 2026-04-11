@@ -1132,3 +1132,47 @@ async def test_speck_encryption(dut):
     assert ry == 0x454e028b, f"SAI y! Ky vong 0x454e028b nhung nhan duoc 0x{ry:08X}"
     
     dut._log.info("✔ MCU DA CHAY THANH CONG THUAT TOAN SPECK NSA :))")
+    
+# change Makefile to run below test case:
+# TOPLEVEL = tb_qspi
+# VERILOG_SOURCES += $(PWD)/tb_qspi.v $(PWD)/sim_qspi.v
+    
+#@cocotb.test()
+# async def test_dump(dut):
+    # dut._log.info("▶ BAT DAU CHAY CODE TU VERILOG QSPI FLASH")
+    
+    # # 1. Khởi tạo xung nhịp
+    # clock = Clock(dut.clk, 20.0, unit="ns")
+    # cocotb.start_soon(clock.start())
+
+    # # 2. KHỞI TẠO RESET VỚI LATENCY = 3 (BẮT BUỘC THEO THIẾT KẾ CỦA TÁC GIẢ)
+    # await reset(dut, 2)
+    
+    # dut._log.info("✔ CPU đã được Reset với Latency = 3, đang tự động nã lệnh...")
+
+    # # 3. Chờ CPU chạy. (prime.hex tính số nguyên tố rất lâu, nên chờ hẳn 5000 cycles)
+    # await ClockCycles(dut.clk, 50010)
+
+    # # 4. In kết quả
+    # dut._log.info("=" * 40)
+    # dut._log.info(" KẾT QUẢ THANH GHI SAU KHI CHẠY ASSEMBLY")
+    # dut._log.info("=" * 40)
+
+    for i in range(16):
+        try:
+            if i == 0:
+                dut._log.info("x0  = 0x00000000 (Hardwired to 0)")
+                continue
+            
+            # Giữ nguyên đường dẫn Hierarchy siêu dài bro đã tìm ra
+            reg_val = dut.user_project.i_tinyqv.cpu.i_core.i_registers.registers[i].value
+            
+            if reg_val.is_resolvable:
+                dut._log.info(f"x{i:<2} = 0x{reg_val.integer:08X}")
+            else:
+                dut._log.info(f"x{i:<2} = 0xXXXXXXXX (Undefined)")
+                
+        except Exception as e:
+            dut._log.error(f"Lỗi truy cập x{i}: {e}")
+
+    dut._log.info("=" * 40)

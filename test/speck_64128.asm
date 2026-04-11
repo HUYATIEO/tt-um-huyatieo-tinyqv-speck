@@ -47,14 +47,14 @@ ADDI x8,x0,0
 ADDI x9,x0,27
 
 speck:
-SPECK_SUM x1, x1, x2
+SPECKSUM x1, x1, x2
 XOR x1, x1, x10 #x1
-SPECK_XOR x2, x2, x1 #y1
+SPECKXOR x2, x2, x1 #y1
 
-SPECK_SUM x11, x11, x10
+SPECKSUM x11, x11, x10
 XOR       x11, x11, x8 #l3
 ADDI      x8, x8, 1 #i=+1
-SPECK_XOR x10, x10, x11 #k1
+SPECKXOR x10, x10, x11 #k1
 
 ADDI      x7, x11, 0    #l3->x7
 ADDI      x11, x5, 0    #l1->x11

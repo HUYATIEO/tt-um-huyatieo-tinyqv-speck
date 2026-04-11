@@ -13,7 +13,7 @@ Both instructions use the standard **R-Type Format** mapped to the Custom-0 opco
 * **Encoding:** `Opcode: 0x0B` | `Funct3: 0b000` | `Funct7: 0b0000000`
 * **Assembly Macro:**
   ```assembly
-  .macro speck_sum rd, rs1, rs2
+  .macro specksum rd, rs1, rs2
       .insn R 0x0B, 0, 0, \rd, \rs1, \rs2
   .endm
   ```
@@ -23,7 +23,7 @@ Both instructions use the standard **R-Type Format** mapped to the Custom-0 opco
 * **Encoding:** `Opcode: 0x0B` | `Funct3: 0b001` | `Funct7: 0b0000000`
 * **Assembly Macro:**
   ```assembly
-  .macro speck_xor rd, rs1, rs2
+  .macro speckxor rd, rs1, rs2
       .insn R 0x0B, 1, 0, \rd, \rs1, \rs2
   .endm
   ```

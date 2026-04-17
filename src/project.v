@@ -5,7 +5,7 @@
 
 `define default_netname none
 
-module tt_um_huyatieo_tinyqv_speck(
+module tt_um_thaoatieo_tinyqv_speck(
     input  wire [7:0] ui_in,    // Dedicated inputs
     output wire [7:0] uo_out,   // Dedicated outputs
 /*verilator lint_off UNUSEDSIGNAL*/

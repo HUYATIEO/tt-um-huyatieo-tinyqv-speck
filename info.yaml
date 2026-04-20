@@ -1,6 +1,6 @@
 # Tiny Tapeout project information
 project:
-  title:        "tinyqv-speck"      # Project title
+  title:        "Speck-V SoC"      # Project title
   author:       "huyatieo"      # Your name
   discord:      "huybesideyou"      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
   description:  "A TinyQV SoC featuring Custom ISA Extensions for SPECK-ARX Lightweight Crypto"      # One line description of what your project does
